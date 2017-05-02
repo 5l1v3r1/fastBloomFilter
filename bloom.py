@@ -101,9 +101,10 @@ class BloomFilter(object):
 	if filename !=None and self.load() == True:
 		print "BLOOM: Loaded OK"
 	else:
-	        self.bfilter = bytearray(array_size)    # The filter itself
+		self.bfilter = list()
+	        self.bfilter[0] = bytearray(array_size)    # The filter itself
         	self.bitcount = array_size * 8          # Bits in the filter
-
+		self.topfilter = 0
 
 
 	print "BLOOM: filename: %s, do_hashes: %s, slices: %d, bits_per_hash: %d, do_bkp: %s, shuffle: %s" % (self.filename, self.do_hashes, self.slices, self.slice_bits,self.do_bkp,self.shuffle)
@@ -118,11 +119,11 @@ class BloomFilter(object):
 	print self.hashes,self.bits_per_hash,self.bitcount
 
     def calc_entropy(self):
-	self.entropy = shannon_entropy(self.bfilter)
+	self.entropy = shannon_entropy(self.bfilter[self.topfilter])
 	print "Entropy: %1.8f" % self.entropy 
 
     def calc_hashid(self):
-	data = str(self.bfilter)
+	data = str(self.bfilter[self.topfilter])
 	self.hashid = blake2b512(data)
 	del data
 	print "BLOOM: HASHID:", self.hashid.hexdigest()[0:8]
@@ -131,9 +132,9 @@ class BloomFilter(object):
 	if self.merging == False:
 		self.merging = True
 		print "BLOOM: Merging..."
-		if len(bfilter) == len(self.bfilter):
+		if len(bfilter) == len(self.bfilter[self.topfilter]):
 			for i in range(0,len(bfilter)-1):
-				self.bfilter[i] |= bfilter[i]
+				self.bfilter[self.topfilter][i] |= bfilter[i]
 			print "BLOOM: Merged Ok"
 		else:
 			print "Bloom filters are not conformable"
@@ -182,7 +183,7 @@ class BloomFilter(object):
             # 2 to the power of digest modulo 8. Ex: 2 ** (30034 % 8) 
             # to grantee the value is <= 128, the bytearray not being able 
             # to store a value >= 256. Q: Why not use ((modulo 9) -1) then?
-            self.bfilter[(digest / 8)] |= (2 ** (digest % 8))
+            self.bfilter[self.topfilter][(digest / 8)] |= (2 ** (digest % 8))
             # The purpose here is to spread out the hashes to create a unique 
             # "fingerprint" with unique locations in the filter array, 
             # rather than just a big long hash blob.
@@ -200,8 +201,14 @@ class BloomFilter(object):
 
     def _query(self,_hash):
 	#global bfilter
-	return all(self.bfilter[(digest / 8)] & (2 ** (digest % 8)) 
-            for digest in _hash)
+	#return all(self.bfilter[self.topfilter][(digest / 8)] & (2 ** (digest % 8)) 
+        #    for digest in _hash)
+	for curfilter in xrange(0,self.topfilter):
+		if all(self.bfilter[curfilter][(digest / 8)] & (2 ** (digest % 8)) for digest in _hash)
+			#break
+			return True
+	return False
+
 
     def update(self,value):
 	_hash = self._hash(value)
@@ -269,15 +276,19 @@ class BloomFilter(object):
 		self.header=data[0:10]
 		print "HEADER:", self.header.encode('hex')
 		if self.header[0:6] == 'BLOOM:':
-			self.bfilter = bytearray()
+			self.topfilter = 0
+			self.bfilter = list()
+			self.bfilter[self.topfilter] = bytearray()
 			self.hashid = blake2b512(data[10:])
-			self.bfilter.extend(data[10:])
+			self.bfilter[self.topfilter].extend(data[10:])
 		else:
 			print "BLOOM: HEADER ERROR, FILTER IS NOT REALIABLE!!!"
-			self.bfilter = bytearray()
+			self.topfilter = 0
+			self.bfilter = list()
+			self.bfilter[self.topfilter] = bytearray()
 			#self.hashid = blake2b512(data)
-                        self.bfilter.extend(data)
-                self.bitcount = len(self.bfilter) * 8
+                        self.bfilter[self.topfilter].extend(data)
+                self.bitcount = len(self.bfilter[self.topfilter]) * 8
                 self.bitset = 0
 		#return True	
 
@@ -293,8 +304,9 @@ class BloomFilter(object):
 
     def _dump(self):
 	print "Dumping filter contents..."
-	for i in xrange(0,len(self.bfilter)-1,64):
-		print str(self.bfilter[i:i+64]).encode('hex')
+	for topfilter in xrange(0,len(self.topfilter)):
+		for i in xrange(0,len(self.bfilter[topfilter])-1,64):
+			print str(self.bfilter[topfilter][i:i+64]).encode('hex')
 
 
     def _writefile(self,data,filename):
@@ -367,7 +379,7 @@ class BloomFilter(object):
 	    except:
 		pass
 
-	    data = str(self.bfilter)
+	    data = str(self.bfilter[self.topfilter])
             self.hashid = blake2b512(data)
 	    self.header = "BLOOM:" + self.hashid.digest()[0:4]
 	    #print len(self.header)
